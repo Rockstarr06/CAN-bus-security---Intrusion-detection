@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Sep 30 16:06:40 2024
+
+@author: Pravesh
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CNN for CAN Bus Intrusion Detection - Optimized for 90% Accuracy
+"""
+
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tensorflow.keras import layers, models, regularizers
+from tensorflow.keras.optimizers import Adam
+import time
+
+# Step 1: Load datasets
+file_attack_free = '/Users/Pravesh/Downloads/10) CAN-Intrusion Dataset/Attack_free_dataset.txt'
+file_dos_attack = '/Users/Pravesh/Downloads/10) CAN-Intrusion Dataset/DoS_attack_dataset.txt'
+file_fuzzy_attack = '/Users/Pravesh/Downloads/10) CAN-Intrusion Dataset/Fuzzy_attack_dataset.txt'
+file_impersonation_attack = '/Users/Pravesh/Downloads/10) CAN-Intrusion Dataset/Impersonation_attack_dataset.txt'
+
+columns = ['Timestamp', 'CAN_ID', 'DLC', 'DATA0', 'DATA1', 'DATA2', 'DATA3', 'DATA4', 'DATA5', 'DATA6', 'DATA7']
+df_attack_free = pd.read_csv(file_attack_free, sep='\s+', header=None, names=columns, on_bad_lines='skip')
+df_dos_attack = pd.read_csv(file_dos_attack, sep='\s+', header=None, names=columns, on_bad_lines='skip')
+df_fuzzy_attack = pd.read_csv(file_fuzzy_attack, sep='\s+', header=None, names=columns, on_bad_lines='skip')
+df_impersonation_attack = pd.read_csv(file_impersonation_attack, sep='\s+', header=None, names=columns, on_bad_lines='skip')
+
+# Step 2: Assign labels
+df_attack_free['Label'] = 0
+df_dos_attack['Label'] = 1
+df_fuzzy_attack['Label'] = 2
+df_impersonation_attack['Label'] = 3
+
+# Step 3: Combine datasets
+df_combined = pd.concat([df_attack_free, df_dos_attack, df_fuzzy_attack, df_impersonation_attack], ignore_index=True)
+
+# Step 4: Preprocessing
+df_combined['CAN_ID'] = pd.to_numeric(df_combined['CAN_ID'], errors='coerce').fillna(0).astype(int)
+df_combined['DLC'] = pd.to_numeric(df_combined['DLC'], errors='coerce').fillna(0).astype(int)
+
+for i in range(8):
+    df_combined[f'DATA{i}'] = pd.to_numeric(df_combined[f'DATA{i}'], errors='coerce').fillna(0).astype(int)
+
+df_combined = df_combined.drop(['Timestamp'], axis=1)
+
+# Step 5: Feature Scaling
+scaler = StandardScaler()
+X = df_combined.drop('Label', axis=1)
+y = df_combined['Label']
+
+# Ensure valid labels only (0, 1, 2, 3)
+print("Unique labels in the dataset: ", np.unique(y))
+
+X_scaled = scaler.fit_transform(X)
+
+# Step 6: Reshape data for CNN input
+X_reshaped = X_scaled.reshape((X_scaled.shape[0], X_scaled.shape[1], 1))
+print(f"X_reshaped shape: {X_reshaped.shape}")
+
+# Step 7: Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X_reshaped, y, test_size=0.3, stratify=y, random_state=42)
+print(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
+
+# Step 8: Define Optimized CNN Model
+def build_optimized_cnn_model(input_shape):
+    inputs = layers.Input(shape=input_shape)
+
+    # Block 1
+    x = layers.Conv1D(512, 5, activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.001))(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling1D(pool_size=2)(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Block 2 with Residual Connection
+    skip = layers.Conv1D(512, 1, padding='same')(x) 
+    x = layers.Conv1D(512, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.add([x, skip])
+    x = layers.MaxPooling1D(pool_size=2)(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Block 3 with Reduced MaxPooling
+    skip = layers.Conv1D(256, 1, padding='same')(x)
+    x = layers.Conv1D(256, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.add([x, skip])
+    x = layers.Dropout(0.3)(x)
+
+    # Block 4 (Additional block)
+    x = layers.Conv1D(128, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Fully Connected Layers
+    x = layers.Flatten()(x)
+    x = layers.Dense(1024, activation='relu', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.5)(x)
+    x = layers.Dense(512, activation='relu', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.Dropout(0.5)(x)
+
+    outputs = layers.Dense(4, activation='softmax')(x)
+
+    model = models.Model(inputs, outputs)
+    model.compile(optimizer=Adam(learning_rate=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+# Step 9: Callback to Print Time for Each Epoch
+class TimeHistory(tf.keras.callbacks.Callback):
+    def on_epoch_begin(self, epoch, logs=None):
+        self.epoch_start_time = time.time()
+        print(f"Epoch {epoch + 1} started...")
+
+    def on_epoch_end(self, epoch, logs=None):
+        elapsed_time = time.time() - self.epoch_start_time
+        print(f"Epoch {epoch + 1} ended. Time taken: {elapsed_time:.2f} seconds\n")
+
+# Step 10: Build and Train the Model with Time Tracking
+model = build_optimized_cnn_model((X_train.shape[1], 1))
+time_callback = TimeHistory()
+
+# Step 11: Train the model for 50 epochs
+history = model.fit(X_train, y_train, epochs=50, batch_size=128, validation_data=(X_test, y_test), callbacks=[time_callback])
+
+# Step 12: Evaluate the Model
+y_pred = model.predict(X_test)
+y_pred_classes = np.argmax(y_pred, axis=1)
+
+# Step 13: Confusion Matrix and Classification Report
+conf_matrix = confusion_matrix(y_test, y_pred_classes)
+print("\nConfusion Matrix:\n", conf_matrix)
+
+print("\nClassification Report:\n", classification_report(y_test, y_pred_classes))
+
+# ROC-AUC Score
+roc_auc = roc_auc_score(y_test, y_pred, multi_class='ovr')
+print(f"\nROC-AUC Score: {roc_auc:.2f}")
+
+# Step 14: Plot Accuracy vs Epoch and Loss vs Epoch
+plt.figure(figsize=(14, 6))
+
+# Plot Loss vs. Epoch
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Loss vs Epochs')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+
+# Plot Accuracy vs. Epoch
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Accuracy vs Epochs')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.show()
+
+# Step 15: Plot Confusion Matrix
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues', xticklabels=['Normal', 'DoS', 'Fuzzy', 'Impersonation'], 
+            yticklabels=['Normal', 'DoS', 'Fuzzy', 'Impersonation'])
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
